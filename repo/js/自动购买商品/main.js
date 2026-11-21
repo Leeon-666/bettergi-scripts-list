@@ -203,8 +203,14 @@ async function loadExternalData() {
 
         // 调试模式下加载识别图片
         if (debugNpcFoods) {
-            for (const foods of debugNpcFoods.values()) {
-                if (foods) foods.forEach(food => requiredFoods.add(food));
+            for (const [npcName, foods] of debugNpcFoods.entries()) {
+                if (foods) {
+                    foods.forEach(food => requiredFoods.add(food));
+                } else {
+                    // 只指定商人未指定商品：默认购买该商人全部商品，需加载其所有商品图片
+                    const npc = findNpcByName(npcName);
+                    if (npc) getAllNpcFoods(npc).forEach(food => requiredFoods.add(food));
+                }
             }
         }
 
@@ -622,11 +628,6 @@ function updateNpcRecord(records, npcName, refreshType, purchasedItems) {
         records.push(record);
     }
 
-    // 合并已购商品（去重），而非覆盖
-    const existing = record[refreshType] || [];
-    const merged = [...new Set([...existing, ...purchasedItems])];
-    record[refreshType] = merged;
-
     const now = new Date();
     let refreshTime;
 
@@ -676,6 +677,12 @@ function updateNpcRecord(records, npcName, refreshType, purchasedItems) {
         // 每月1号刷新商品：下次刷新是下个月1号
         refreshTime = getNextMonthFirstDay(now);
     }
+
+    // 合并已购商品（去重），而非覆盖
+    // 若上一条记录已过刷新时间，旧数据丢弃，
+    const prevRefreshTime = record[`${refreshType}_time`] ? new Date(record[`${refreshType}_time`]) : null;
+    const existing = (prevRefreshTime && prevRefreshTime > now) ? (record[refreshType] || []) : [];
+    record[refreshType] = [...new Set([...existing, ...purchasedItems])];
 
     record[`${refreshType}_time`] = formatDateToLocalISO(refreshTime);
 
@@ -1169,11 +1176,13 @@ async function initRo() {
             for (const imagePath of candidatePaths) {
                 try {
                     const ro = RecognitionObject.TemplateMatch(file.ReadImageMatSync(imagePath));
-                    ro.Threshold = 0.84;
+                    // 特定商品自定义阈值：默认0.84
+                    const customThresholds = { "小麦": 0.75, "土豆": 0.9, "牛奶": 0.85 };
+                    ro.Threshold = customThresholds[foodName] || 0.84;
                     ro.Use3Channels = true;
                     foodROMap[roKey] = ro;
                     loaded = true;
-                    logConditional(`已启用商品: ${foodName} (${imagePath})`);
+                    logConditional(`已启用商品: ${foodName} (${imagePath}, 阈值:${ro.Threshold})`);
                     break;
                 } catch (e) {
                     // 读取或创建识别对象失败，尝试下一个候选路径
